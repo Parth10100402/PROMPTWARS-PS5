@@ -7,6 +7,22 @@ import {
   ActionPriority,
 } from '@/types';
 
+/**
+ * Transforms detected operational exceptions into actionable, pre-populated workflow drafts.
+ * Every generated draft requires human review and explicit affirmative sign-off before execution.
+ *
+ * Performance guarantee:
+ * Indexes relational entity arrays into O(1) Map lookups upfront, avoiding O(E * N) quadratic scans.
+ *
+ * @param exceptions - Prioritized operational exceptions from the detection engine.
+ * @param inventory - Active catalog inventory state.
+ * @param orders - Customer purchase orders.
+ * @param invoices - Accounts receivable invoices.
+ * @param timestamp - ISO 8601 execution timestamp.
+ * @returns Array of deduplicated DraftAction records queued in PENDING status.
+ *
+ * @complexity Time: O(E + N + M + K) linear pass | Space: O(E) for output and lookup maps.
+ */
 export function generateDraftActions(
   exceptions: OperationalException[],
   inventory: InventoryItem[],
@@ -17,13 +33,19 @@ export function generateDraftActions(
   const actions: DraftAction[] = [];
   const processedRecords = new Set<string>();
 
+  // Index catalog datasets into O(1) HashMaps for efficient record resolution
+  const inventoryMap = new Map<string, InventoryItem>(inventory.map((i) => [i.sku, i]));
+  const ordersMap = new Map<string, OrderItem>(orders.map((o) => [o.orderId, o]));
+  const invoicesMap = new Map<string, InvoiceItem>(invoices.map((i) => [i.invoiceId, i]));
+
   for (const exc of exceptions) {
     if (processedRecords.has(exc.relatedRecordId)) {
       continue;
     }
 
+    // 1. Inventory Stockout Replenishment (PO Draft)
     if (exc.category === 'INVENTORY' && (exc.severity === 'CRITICAL' || exc.severity === 'HIGH')) {
-      const item = inventory.find((i) => i.sku === exc.relatedRecordId);
+      const item = inventoryMap.get(exc.relatedRecordId);
       if (item) {
         processedRecords.add(item.sku);
         const reorderQty = item.reorderQuantity || Math.ceil(item.avgDailySales * item.targetCoverDays);
@@ -56,8 +78,10 @@ export function generateDraftActions(
           createdAt: timestamp,
         });
       }
-    } else if (exc.category === 'ORDER') {
-      const order = orders.find((o) => o.orderId === exc.relatedRecordId);
+    } 
+    // 2. Delayed Customer Order Mitigation (Expedited Follow-up Draft)
+    else if (exc.category === 'ORDER') {
+      const order = ordersMap.get(exc.relatedRecordId);
       if (order && order.isDelayed) {
         processedRecords.add(order.orderId);
         const priority: ActionPriority =
@@ -81,8 +105,10 @@ export function generateDraftActions(
           createdAt: timestamp,
         });
       }
-    } else if (exc.category === 'RECEIVABLE') {
-      const inv = invoices.find((i) => i.invoiceId === exc.relatedRecordId);
+    } 
+    // 3. Delinquent Accounts Receivable (Payment Reminder Notice)
+    else if (exc.category === 'RECEIVABLE') {
+      const inv = invoicesMap.get(exc.relatedRecordId);
       if (inv && inv.isOverdue) {
         processedRecords.add(inv.invoiceId);
         const priority: ActionPriority =
@@ -108,7 +134,9 @@ export function generateDraftActions(
           createdAt: timestamp,
         });
       }
-    } else if (exc.category === 'SALES' && exc.severity === 'HIGH') {
+    } 
+    // 4. Sales Surge Anomalies (ERP Safety Buffer Adjustment Task)
+    else if (exc.category === 'SALES' && exc.severity === 'HIGH') {
       processedRecords.add(exc.relatedRecordId);
       actions.push({
         id: `ACT-TASK-${exc.relatedRecordId}`,

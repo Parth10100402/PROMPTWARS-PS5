@@ -17,11 +17,37 @@ import {
 } from './tools';
 import { generateGeminiExplanations } from './llm';
 
+/**
+ * Execution parameters for the operational analysis engine.
+ */
 export interface RunAnalysisOptions {
+  /** Reference evaluation date (ISO string YYYY-MM-DD). Defaults to '2026-11-18'. */
   referenceDate?: string;
+  /** Whether to invoke Google Gemini for contextual narrative synthesis. */
   enableAi?: boolean;
 }
 
+/**
+ * Executes the complete autonomous operations control tower analysis pipeline:
+ *
+ * 1. Emits an initial immutable audit log entry.
+ * 2. Invokes deterministic allowlisted operational inspection tools:
+ *    - Inventory coverage & reorder deficits
+ *    - Order dispatch SLA delays
+ *    - Accounts receivable collection delinquency
+ *    - Sales velocity demand spikes
+ * 3. Applies multi-tier priority heuristics to detected exceptions.
+ * 4. Calculates the multi-dimensional Business Health Score (0-100).
+ * 5. Synthesizes human-in-the-loop Draft Actions with deduplication.
+ * 6. Records all action drafting and approval requests in the audit stream.
+ * 7. Optionally enriches findings with Google Gemini explanations with deterministic fallback.
+ *
+ * @param state - Complete business dataset state.
+ * @param options - Execution configuration parameters.
+ * @returns Comprehensive analysis outcome ready for state reconciliation.
+ *
+ * @complexity Time: O(N + M + K) linear in dataset size | Space: O(E) for exceptions and drafts.
+ */
 export async function runOperationsAnalysis(
   state: BusinessState,
   options: RunAnalysisOptions = {}

@@ -102,10 +102,23 @@ export async function askOpsPilotAgent(
   const normalizedQ = question.toLowerCase().trim();
   const apiKey = process.env.GEMINI_API_KEY?.trim();
 
-  // Compute facts from state
-  const criticalItems = state.inventory.filter((i) => i.riskLevel === 'CRITICAL');
-  const delayedOrders = state.orders.filter((o) => o.isDelayed);
-  const overdueInvoices = state.invoices.filter((i) => i.isOverdue);
+  // Compute facts from state with automatic rule evaluation for raw datasets
+  const referenceDate = '2026-11-18';
+  const criticalItems = state.inventory.filter((i) => {
+    if (i.riskLevel) return i.riskLevel === 'CRITICAL';
+    const cover = i.avgDailySales > 0 ? i.stockOnHand / i.avgDailySales : 0;
+    return cover < i.leadTimeDays;
+  });
+
+  const delayedOrders = state.orders.filter((o) => {
+    if (typeof o.isDelayed === 'boolean') return o.isDelayed;
+    return o.promisedDate < referenceDate && o.status !== 'delivered' && o.status !== 'cancelled';
+  });
+
+  const overdueInvoices = state.invoices.filter((i) => {
+    if (typeof i.isOverdue === 'boolean') return i.isOverdue;
+    return i.dueDate < referenceDate && (i.status === 'unpaid' || i.status === 'overdue' || i.status === 'disputed');
+  });
   const criticalCount = state.exceptions.filter((e) => e.severity === 'CRITICAL').length;
   const highCount = state.exceptions.filter((e) => e.severity === 'HIGH').length;
 
@@ -165,7 +178,32 @@ export async function askOpsPilotAgent(
   let answer = '';
   const referencedIds: string[] = [];
 
-  if (normalizedQ.includes('attention') || normalizedQ.includes('prioritize') || normalizedQ.includes('today')) {
+  // Check for specific SKU queries first (e.g. "Why is SKU-101 critical?", "Status of SKU-999")
+  const skuMatch = normalizedQ.match(/sku-[a-z0-9]+/i);
+  if (skuMatch) {
+    const targetSku = skuMatch[0].toUpperCase();
+    const product = state.inventory.find((i) => i.sku.toUpperCase() === targetSku);
+    if (product) {
+      const cover = product.daysOfCover ?? (product.avgDailySales > 0 ? (product.stockOnHand / product.avgDailySales).toFixed(2) : 0);
+      const reorderQty = product.reorderQuantity ?? Math.max(0, (product.targetCoverDays || 14) * product.avgDailySales - product.stockOnHand - (product.incomingStock || 0));
+      const isCritical = product.riskLevel === 'CRITICAL' || (product.avgDailySales > 0 && product.stockOnHand / product.avgDailySales < product.leadTimeDays);
+
+      answer = `**Analysis for ${product.sku} (${product.productName})**:\n\n` +
+        `• Current Stock: ${product.stockOnHand} units\n` +
+        `• Average Daily Sales: ${product.avgDailySales} units/day\n` +
+        `• Days of Coverage: ${cover} days\n` +
+        `• Lead Time from ${product.supplierName}: ${product.leadTimeDays} days\n` +
+        `• Target Coverage: ${product.targetCoverDays} days\n\n` +
+        `**Risk Assessment**: ${
+          isCritical
+            ? `Critical. Since coverage (${cover}d) is significantly lower than supplier lead time (${product.leadTimeDays}d), the warehouse will exhaust stock before a newly placed order can arrive. Immediate approval of the suggested ${reorderQty}-unit reorder is strongly advised.`
+            : `Product stock is within normal operating thresholds.`
+        }`;
+      referencedIds.push(product.sku);
+    } else {
+      answer = `Product SKU ${targetSku} was not found in the currently loaded inventory dataset.`;
+    }
+  } else if (normalizedQ.includes('attention') || normalizedQ.includes('prioritize') || normalizedQ.includes('today')) {
     answer = `Here is your operational priority rundown for today:\n\n` +
       `1. **Inventory Stockouts**: ${criticalItems.length} product(s) at critical risk of running out before supplier shipments arrive (${criticalItems.map((i) => i.sku).join(', ') || 'None'}).\n` +
       `2. **Delayed Customer Shipments**: ${delayedOrders.length} order(s) past promised delivery dates totaling $${delayedOrders.reduce((s, o) => s + o.amount, 0).toLocaleString()}.\n` +
@@ -226,20 +264,6 @@ export async function askOpsPilotAgent(
       `• **Fulfillment Rate**: ${state.healthScore?.fulfillmentScore ?? 100}%\n` +
       `• **Receivables Collection**: ${state.healthScore?.receivablesScore ?? 100}%\n\n` +
       `${state.healthScore?.summary || 'Operations within standard parameters.'}`;
-  } else if (normalizedQ.includes('sku-101')) {
-    const sku101 = state.inventory.find((i) => i.sku === 'SKU-101');
-    if (sku101) {
-      answer = `**Analysis for SKU-101 (${sku101.productName})**:\n\n` +
-        `• Current Stock: ${sku101.stockOnHand} units\n` +
-        `• Average Daily Sales: ${sku101.avgDailySales} units/day\n` +
-        `• Days of Coverage: ${sku101.daysOfCover} days\n` +
-        `• Lead Time from ${sku101.supplierName}: ${sku101.leadTimeDays} days\n` +
-        `• Target Coverage: ${sku101.targetCoverDays} days\n\n` +
-        `**Risk Assessment**: Critical. Since coverage (${sku101.daysOfCover}d) is significantly lower than supplier lead time (${sku101.leadTimeDays}d), the warehouse will exhaust stock before a newly placed order can arrive. Immediate approval of the suggested ${sku101.reorderQuantity}-unit reorder is strongly advised.`;
-      referencedIds.push('SKU-101');
-    } else {
-      answer = `SKU-101 was not found in the currently loaded inventory dataset.`;
-    }
   } else {
     answer = `OpsPilot operational status: Operations score is ${businessFacts.healthScore}/100 (${businessFacts.healthTier}). ` +
       `Currently tracking ${state.inventory.length} inventory lines, ${state.orders.length} orders, and ${state.invoices.length} invoices. ` +

@@ -110,7 +110,7 @@ export interface AuditEvent {
   actor: 'AGENT' | 'HUMAN';
   actionId?: string;
   summary: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   severity?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'INFO';
 }
 

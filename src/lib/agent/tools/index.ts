@@ -179,7 +179,11 @@ export function createPaymentReminderDraft(
   };
 }
 
-// Explicit Tool Registry & Allowlist
+/**
+ * Explicit Agent Tool Registry & Security Allowlist.
+ * Only functions explicitly registered herein can be invoked by the operations agent.
+ * Any dynamic or unmapped function call is rejected with an authorization exception.
+ */
 export const ALLOWED_AGENT_TOOLS = {
   analyzeInventory,
   analyzeOrders,
@@ -195,6 +199,14 @@ export const ALLOWED_AGENT_TOOLS = {
 
 export type AllowedToolName = keyof typeof ALLOWED_AGENT_TOOLS;
 
+/**
+ * Type-safe dispatcher that enforces strict allowlist confinement for agent operations.
+ *
+ * @param toolName - Identifier of the allowed operational tool.
+ * @param args - Strongly typed arguments corresponding to the tool signature.
+ * @returns Strongly typed result of the tool invocation.
+ * @throws Error if an unrecognized tool name is supplied.
+ */
 export function executeAllowedTool<T extends AllowedToolName>(
   toolName: T,
   ...args: Parameters<(typeof ALLOWED_AGENT_TOOLS)[T]>
@@ -202,6 +214,8 @@ export function executeAllowedTool<T extends AllowedToolName>(
   if (!(toolName in ALLOWED_AGENT_TOOLS)) {
     throw new Error(`Unauthorized tool execution attempt: ${String(toolName)}`);
   }
-  const toolFn = ALLOWED_AGENT_TOOLS[toolName] as (...a: any[]) => any;
+  const toolFn = (ALLOWED_AGENT_TOOLS[toolName] as unknown) as (
+    ...a: Parameters<(typeof ALLOWED_AGENT_TOOLS)[T]>
+  ) => ReturnType<(typeof ALLOWED_AGENT_TOOLS)[T]>;
   return toolFn(...args);
 }

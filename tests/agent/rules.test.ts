@@ -190,4 +190,114 @@ describe('OpsPilot Deterministic Business Rules', () => {
     expect(exceptions.length).toBe(1);
     expect(exceptions[0].id).toContain('EXC-SALE-SURGE-SKU-ANOMALY-1');
   });
+
+  // Test 9: Edge case - Zero stock and zero sales safety
+  it('safely handles zero stock and zero average daily sales without throwing', () => {
+    expect(calculateDaysOfCover(0, 0)).toBe(0);
+    expect(calculateDaysOfCover(100, 0)).toBe(999);
+    expect(calculateReorderQuantity(0, 0, 0, 14)).toBe(0);
+  });
+
+  // Test 10: Boundary test - Orders on exact promised date are not flagged as delayed
+  it('does not flag orders as delayed when current date equals promised date', () => {
+    const orders: OrderItem[] = [
+      {
+        orderId: 'ORD-EXACT-DATE',
+        customerName: 'Punctual Retailer',
+        orderDate: '2026-11-10',
+        promisedDate: '2026-11-18', // Today is 2026-11-18
+        status: 'processing',
+        amount: 1200,
+      },
+    ];
+
+    const { enrichedOrders, exceptions } = evaluateOrderRules(orders, '2026-11-18', '2026-11-18T00:00:00Z');
+    expect(enrichedOrders[0].isDelayed).toBe(false);
+    expect(exceptions.length).toBe(0);
+  });
+
+  // Test 11: Boundary test - Invoices on exact due date are not flagged as overdue
+  it('does not flag invoices as overdue when current date equals due date', () => {
+    const invoices: InvoiceItem[] = [
+      {
+        invoiceId: 'INV-EXACT-DATE',
+        customerName: 'Punctual Payer',
+        issueDate: '2026-10-18',
+        dueDate: '2026-11-18', // Due today
+        amount: 3500,
+        status: 'unpaid',
+      },
+    ];
+
+    const { enrichedInvoices, exceptions } = evaluateInvoiceRules(invoices, '2026-11-18', '2026-11-18T00:00:00Z');
+    expect(enrichedInvoices[0].isOverdue).toBe(false);
+    expect(exceptions.length).toBe(0);
+  });
+
+  // Test 12: Business Health Score bounds and tier transitions
+  it('accurately transitions health tiers based on cumulative operational exceptions', () => {
+    const criticalCatalog: InventoryItem[] = [
+      {
+        sku: 'SKU-CRIT-1',
+        productName: 'Empty Stock Part',
+        category: 'Parts',
+        stockOnHand: 1,
+        avgDailySales: 10,
+        leadTimeDays: 7,
+        safetyStockDays: 4,
+        targetCoverDays: 20,
+        incomingStock: 0,
+        unitCost: 100,
+        supplierName: 'Acme',
+        riskLevel: 'CRITICAL',
+      },
+    ];
+
+    const delayedOrders: OrderItem[] = [
+      {
+        orderId: 'ORD-LATE-1',
+        customerName: 'Customer A',
+        orderDate: '2026-11-01',
+        promisedDate: '2026-11-05',
+        status: 'processing',
+        amount: 10000,
+        isDelayed: true,
+        delayDays: 13,
+      },
+    ];
+
+    const overdueInvoices: InvoiceItem[] = [
+      {
+        invoiceId: 'INV-LATE-1',
+        customerName: 'Customer A',
+        issueDate: '2026-10-01',
+        dueDate: '2026-10-25',
+        amount: 20000,
+        status: 'unpaid',
+        isOverdue: true,
+        overdueDays: 24,
+      },
+    ];
+
+    const score = calculateBusinessHealthScore(criticalCatalog, delayedOrders, overdueInvoices, [
+      {
+        id: 'EXC-1',
+        category: 'INVENTORY',
+        severity: 'CRITICAL',
+        title: 'Critical Stockout',
+        description: 'Test',
+        dataEvidence: 'Test',
+        businessImpact: 'Test',
+        recommendedAction: 'Test',
+        confidenceLevel: 0.99,
+        detectedAt: '2026-11-18T00:00:00Z',
+        relatedRecordId: 'SKU-CRIT-1',
+        status: 'PENDING_REVIEW',
+      },
+    ]);
+
+    expect(score.overallScore).toBeLessThan(50);
+    expect(score.healthTier).toBe('CRITICAL');
+    expect(score.summary).toContain('1 critical');
+  });
 });
